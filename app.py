@@ -8,13 +8,17 @@ from sklearn.ensemble import RandomForestClassifier
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import (accuracy_score, precision_score, recall_score, 
                             f1_score, roc_auc_score, roc_curve, confusion_matrix)
-from sklearn.preprocessing import LabelEncoder, StandardScaler
+from sklearn.preprocessing import StandardScaler
 import plotly.express as px
 import plotly.graph_objects as go
-from plotly.subplots import make_subplots
-import shap
-import warnings
-warnings.filterwarnings('ignore')
+
+# Try to import SHAP, but make it optional
+try:
+    import shap
+    SHAP_AVAILABLE = True
+except ImportError:
+    SHAP_AVAILABLE = False
+    st.warning("SHAP is not available. Some explainability features will be limited.")
 
 # Page configuration
 st.set_page_config(
@@ -100,9 +104,9 @@ class HealthAnalyticsApp:
         st.sidebar.header("Data Configuration")
         
         # For demo purposes, we'll use generated data
-        # In real scenario, this would be file upload
         if st.sidebar.button("Generate Sample Data") or self.df is None:
-            self.generate_sample_data()
+            with st.spinner("Generating sample healthcare data..."):
+                self.generate_sample_data()
             st.sidebar.success("Sample healthcare data generated!")
         
         return self.df
@@ -121,7 +125,6 @@ class HealthAnalyticsApp:
             st.subheader("Dataset Shape")
             st.metric("Total Samples", len(self.df))
             st.metric("Number of Features", len(self.df.columns) - 1)
-            st.metric("Memory Usage", f"{self.df.memory_usage(deep=True).sum() / 1024**2:.2f} MB")
         
         # Summary Statistics
         st.subheader("Summary Statistics")
@@ -198,14 +201,12 @@ class HealthAnalyticsApp:
         
         # Model selection
         st.subheader("Model Configuration")
-        col1, col2, col3 = st.columns(3)
+        col1, col2 = st.columns(2)
         
         with col1:
             use_lr = st.checkbox("Logistic Regression", value=True)
         with col2:
             use_rf = st.checkbox("Random Forest", value=True)
-        with col3:
-            rf_estimators = st.slider("RF Estimators", 50, 200, 100)
         
         # Train models
         if st.button("Train Models"):
@@ -216,7 +217,7 @@ class HealthAnalyticsApp:
                     self.models['Logistic Regression'] = lr_model
                 
                 if use_rf:
-                    rf_model = RandomForestClassifier(n_estimators=rf_estimators, random_state=42)
+                    rf_model = RandomForestClassifier(n_estimators=100, random_state=42)
                     rf_model.fit(self.X_train, self.y_train)
                     self.models['Random Forest'] = rf_model
                 
@@ -224,6 +225,9 @@ class HealthAnalyticsApp:
                 self.evaluate_models()
                 
                 st.success("Models trained and evaluated successfully!")
+        
+        # Display results
+        self.display_model_results()
 
     def evaluate_models(self):
         """Evaluate trained models and store results"""
@@ -351,6 +355,11 @@ class HealthAnalyticsApp:
             st.info("Please train models first for explainability analysis.")
             return
         
+        if not SHAP_AVAILABLE:
+            st.warning("SHAP is not available. Using built-in feature importance instead.")
+            self.alternative_explainability()
+            return
+        
         st.subheader("Model Explainability with SHAP")
         
         # SHAP analysis for Random Forest
@@ -389,17 +398,36 @@ class HealthAnalyticsApp:
                             color='shap_importance',
                             color_continuous_scale='Plasma')
                 st.plotly_chart(fig, use_container_width=True)
+
+    def alternative_explainability(self):
+        """Alternative explainability without SHAP"""
+        st.subheader("Feature Importance Analysis")
+        
+        if 'Random Forest' in self.models:
+            rf_model = self.models['Random Forest']
+            feature_importance = pd.DataFrame({
+                'feature': self.feature_names,
+                'importance': rf_model.feature_importances_
+            }).sort_values('importance', ascending=False)
             
-            # Individual prediction explanation
-            st.subheader("Individual Prediction Explanation")
-            sample_idx = st.slider("Select test sample to explain", 0, len(self.X_test)-1, 0)
+            col1, col2 = st.columns(2)
             
-            fig, ax = plt.subplots(figsize=(10, 4))
-            shap.waterfall_plot(explainer.expected_value[1] if len(explainer.expected_value) == 2 else explainer.expected_value,
-                               shap_values[1][sample_idx] if len(shap_values) == 2 else shap_values[sample_idx],
-                               features=self.X_test[sample_idx],
-                               feature_names=self.feature_names, show=False)
-            st.pyplot(fig)
+            with col1:
+                fig = px.bar(feature_importance.head(10), 
+                            x='importance', y='feature',
+                            title='Feature Importance (Random Forest)',
+                            color='importance',
+                            color_continuous_scale='Viridis')
+                st.plotly_chart(fig, use_container_width=True)
+            
+            with col2:
+                st.subheader("Model Interpretation")
+                st.markdown("""
+                **Feature Importance Explanation:**
+                - Higher values indicate stronger predictive power
+                - Top features drive most model decisions
+                - Helps identify key risk factors for intervention
+                """)
 
     def ethics_section(self):
         """Section 7: Ethics & Responsible AI"""
@@ -425,7 +453,7 @@ class HealthAnalyticsApp:
         with col2:
             st.markdown("""
             ### 🔍 Transparency & Accountability
-            - **Explainable AI**: SHAP values for model interpretability
+            - **Explainable AI**: Feature importance for model interpretability
             - **Decision Tracking**: Audit trails for all predictions
             - **Stakeholder Communication**: Clear explanations for non-technical users
             
@@ -474,7 +502,6 @@ class HealthAnalyticsApp:
                 self.diagnostic_analytics()
             elif selected_section == "Predictive Analytics":
                 self.predictive_analytics()
-                self.display_model_results()
             elif selected_section == "Prescriptive Analytics":
                 self.prescriptive_analytics()
             elif selected_section == "Explainability & Transparency":
